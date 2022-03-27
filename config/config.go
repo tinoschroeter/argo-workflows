@@ -25,20 +25,8 @@ type Config struct {
 	// NodeEvents configures how node events are emitted
 	NodeEvents NodeEvents `json:"nodeEvents,omitempty"`
 
-	// ExecutorImage is the image name of the executor to use when running pods
-	// DEPRECATED: use --executor-image flag to workflow-controller instead
-	ExecutorImage string `json:"executorImage,omitempty"`
-
-	// ExecutorImagePullPolicy is the imagePullPolicy of the executor to use when running pods
-	// DEPRECATED: use `executor.imagePullPolicy` in configmap instead
-	ExecutorImagePullPolicy string `json:"executorImagePullPolicy,omitempty"`
-
 	// Executor holds container customizations for the executor to use when running pods
 	Executor *apiv1.Container `json:"executor,omitempty"`
-
-	// ExecutorResources specifies the resource requirements that will be used for the executor sidecar
-	// DEPRECATED: use `executor.resources` in configmap instead
-	ExecutorResources *apiv1.ResourceRequirements `json:"executorResources,omitempty"`
 
 	// MainContainer holds container customization for the main container
 	MainContainer *apiv1.Container `json:"mainContainer,omitempty"`
@@ -61,7 +49,6 @@ type Config struct {
 	ArtifactRepository wfv1.ArtifactRepository `json:"artifactRepository,omitempty"`
 
 	// Namespace is a label selector filter to limit the controller's watch to a specific namespace
-	// DEPRECATED: support will be remove in a future release
 	Namespace string `json:"namespace,omitempty"`
 
 	// InstanceID is a label selector to limit the controller's watch to a specific instance. It
@@ -95,9 +82,6 @@ type Config struct {
 
 	// Links to related apps.
 	Links []*wfv1.Link `json:"links,omitempty"`
-
-	// Config customized Docker Sock path
-	DockerSockPath string `json:"dockerSockPath,omitempty"`
 
 	// WorkflowDefaults are values that will apply to all Workflows from this controller, unless overridden on the Workflow-level
 	WorkflowDefaults *wfv1.Workflow `json:"workflowDefaults,omitempty"`
@@ -140,6 +124,13 @@ func (c Config) GetContainerRuntimeExecutor(labels labels.Labels) (string, error
 		return name, nil
 	}
 	return c.ContainerRuntimeExecutor, nil
+}
+
+func (c Config) GetExecutor() *apiv1.Container {
+	if c.Executor != nil {
+		return c.Executor
+	}
+	return &apiv1.Container{}
 }
 
 func (c Config) GetResourceRateLimit() ResourceRateLimit {

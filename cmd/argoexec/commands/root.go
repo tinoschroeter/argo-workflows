@@ -10,20 +10,20 @@ import (
 	kubecli "github.com/argoproj/pkg/kube/cli"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	restclient "k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 
 	"github.com/argoproj/argo-workflows/v3"
 	wfv1 "github.com/argoproj/argo-workflows/v3/pkg/apis/workflow/v1alpha1"
+	"github.com/argoproj/argo-workflows/v3/pkg/client/clientset/versioned"
 	"github.com/argoproj/argo-workflows/v3/util"
 	"github.com/argoproj/argo-workflows/v3/util/cmd"
 	"github.com/argoproj/argo-workflows/v3/util/logs"
 	"github.com/argoproj/argo-workflows/v3/workflow/common"
 	"github.com/argoproj/argo-workflows/v3/workflow/executor"
-	"github.com/argoproj/argo-workflows/v3/workflow/executor/docker"
 	"github.com/argoproj/argo-workflows/v3/workflow/executor/emissary"
-	"github.com/argoproj/argo-workflows/v3/workflow/executor/k8sapi"
 	"github.com/argoproj/argo-workflows/v3/workflow/executor/kubelet"
 	"github.com/argoproj/argo-workflows/v3/workflow/executor/pns"
 )
@@ -112,20 +112,31 @@ func initExecutor() *executor.WorkflowExecutor {
 	var cre executor.ContainerRuntimeExecutor
 	log.Infof("Creating a %s executor", executorType)
 	switch executorType {
-	case common.ContainerRuntimeExecutorK8sAPI:
-		cre = k8sapi.NewK8sAPIExecutor(clientset, config, podName, namespace)
 	case common.ContainerRuntimeExecutorKubelet:
 		cre, err = kubelet.NewKubeletExecutor(namespace, podName)
 	case common.ContainerRuntimeExecutorPNS:
 		cre, err = pns.NewPNSExecutor(clientset, podName, namespace)
-	case common.ContainerRuntimeExecutorDocker:
-		cre, err = docker.NewDockerExecutor(namespace, podName)
 	default:
 		cre, err = emissary.New()
 	}
 	checkErr(err)
 
-	wfExecutor := executor.NewExecutor(clientset, restClient, podName, namespace, cre, *tmpl, includeScriptOutput, deadline, annotationPatchTickDuration, progressFileTickDuration)
+	wfExecutor := executor.NewExecutor(
+		clientset,
+		versioned.NewForConfigOrDie(config).ArgoprojV1alpha1().WorkflowTaskResults(namespace),
+		restClient,
+		podName,
+		os.Getenv(common.EnvVarWorkflowName),
+		os.Getenv(common.EnvVarNodeID),
+		namespace,
+		types.UID(os.Getenv(common.EnvVarWorkflowUID)),
+		cre,
+		*tmpl,
+		includeScriptOutput,
+		deadline,
+		annotationPatchTickDuration,
+		progressFileTickDuration,
+	)
 
 	log.
 		WithField("version", version.String()).

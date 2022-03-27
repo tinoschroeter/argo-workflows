@@ -715,31 +715,6 @@ func TestVolumeAndVolumeMounts(t *testing.T) {
 		},
 	}
 
-	// For Docker executor
-	t.Run("Docker", func(t *testing.T) {
-		ctx := context.Background()
-		woc := newWoc()
-		woc.volumes = volumes
-		woc.execWf.Spec.Templates[0].Container.VolumeMounts = volumeMounts
-		woc.controller.Config.ContainerRuntimeExecutor = common.ContainerRuntimeExecutorDocker
-
-		tmplCtx, err := woc.createTemplateContext(wfv1.ResourceScopeLocal, "")
-		assert.NoError(t, err)
-		_, err = woc.executeContainer(ctx, woc.execWf.Spec.Entrypoint, tmplCtx.GetTemplateScope(), &woc.execWf.Spec.Templates[0], &wfv1.WorkflowStep{}, &executeTemplateOpts{})
-		assert.NoError(t, err)
-		pods, err := listPods(woc)
-		assert.NoError(t, err)
-		assert.Len(t, pods.Items, 1)
-		pod := pods.Items[0]
-		assert.Equal(t, 3, len(pod.Spec.Volumes))
-		assert.Equal(t, "var-run-argo", pod.Spec.Volumes[0].Name)
-		assert.Equal(t, "docker-sock", pod.Spec.Volumes[1].Name)
-		assert.Equal(t, "volume-name", pod.Spec.Volumes[2].Name)
-		assert.Equal(t, 2, len(pod.Spec.Containers[1].VolumeMounts))
-		assert.Equal(t, "volume-name", pod.Spec.Containers[1].VolumeMounts[0].Name)
-		assert.Equal(t, "var-run-argo", pod.Spec.Containers[1].VolumeMounts[1].Name)
-	})
-
 	// For Kubelet executor
 	t.Run("Kubelet", func(t *testing.T) {
 		ctx := context.Background()
@@ -747,30 +722,6 @@ func TestVolumeAndVolumeMounts(t *testing.T) {
 		woc.volumes = volumes
 		woc.execWf.Spec.Templates[0].Container.VolumeMounts = volumeMounts
 		woc.controller.Config.ContainerRuntimeExecutor = common.ContainerRuntimeExecutorKubelet
-
-		tmplCtx, err := woc.createTemplateContext(wfv1.ResourceScopeLocal, "")
-		assert.NoError(t, err)
-		_, err = woc.executeContainer(ctx, woc.execWf.Spec.Entrypoint, tmplCtx.GetTemplateScope(), &woc.execWf.Spec.Templates[0], &wfv1.WorkflowStep{}, &executeTemplateOpts{})
-		assert.NoError(t, err)
-		pods, err := listPods(woc)
-		assert.NoError(t, err)
-		assert.Len(t, pods.Items, 1)
-		pod := pods.Items[0]
-		assert.Equal(t, 2, len(pod.Spec.Volumes))
-		assert.Equal(t, "var-run-argo", pod.Spec.Volumes[0].Name)
-		assert.Equal(t, "volume-name", pod.Spec.Volumes[1].Name)
-		assert.Equal(t, 2, len(pod.Spec.Containers[1].VolumeMounts))
-		assert.Equal(t, "volume-name", pod.Spec.Containers[1].VolumeMounts[0].Name)
-		assert.Equal(t, "var-run-argo", pod.Spec.Containers[1].VolumeMounts[1].Name)
-	})
-
-	// For K8sAPI executor
-	t.Run("K8SAPI", func(t *testing.T) {
-		ctx := context.Background()
-		woc := newWoc()
-		woc.volumes = volumes
-		woc.execWf.Spec.Templates[0].Container.VolumeMounts = volumeMounts
-		woc.controller.Config.ContainerRuntimeExecutor = common.ContainerRuntimeExecutorK8sAPI
 
 		tmplCtx, err := woc.createTemplateContext(wfv1.ResourceScopeLocal, "")
 		assert.NoError(t, err)
@@ -860,7 +811,7 @@ func TestVolumesPodSubstitution(t *testing.T) {
 	woc.volumes = volumes
 	woc.execWf.Spec.Templates[0].Container.VolumeMounts = volumeMounts
 	woc.execWf.Spec.Templates[0].Inputs.Parameters = inputParameters
-	woc.controller.Config.ContainerRuntimeExecutor = common.ContainerRuntimeExecutorDocker
+	woc.controller.Config.ContainerRuntimeExecutor = common.ContainerRuntimeExecutorEmissary
 
 	tmplCtx, err := woc.createTemplateContext(wfv1.ResourceScopeLocal, "")
 	assert.NoError(t, err)
@@ -870,9 +821,9 @@ func TestVolumesPodSubstitution(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Len(t, pods.Items, 1)
 	pod := pods.Items[0]
-	assert.Equal(t, 3, len(pod.Spec.Volumes))
-	assert.Equal(t, "volume-name", pod.Spec.Volumes[2].Name)
-	assert.Equal(t, "test-name", pod.Spec.Volumes[2].PersistentVolumeClaim.ClaimName)
+	assert.Equal(t, 2, len(pod.Spec.Volumes))
+	assert.Equal(t, "volume-name", pod.Spec.Volumes[1].Name)
+	assert.Equal(t, "test-name", pod.Spec.Volumes[1].PersistentVolumeClaim.ClaimName)
 	assert.Equal(t, 2, len(pod.Spec.Containers[1].VolumeMounts))
 	assert.Equal(t, "volume-name", pod.Spec.Containers[1].VolumeMounts[0].Name)
 }
@@ -1392,8 +1343,10 @@ func TestPodSpecPatchPodName(t *testing.T) {
 }
 
 func TestMainContainerCustomization(t *testing.T) {
+	ctx := context.Background()
 	mainCtrSpec := &apiv1.Container{
-		Name: common.MainContainerName,
+		Name:            common.MainContainerName,
+		SecurityContext: &apiv1.SecurityContext{},
 		Resources: apiv1.ResourceRequirements{
 			Limits: apiv1.ResourceList{
 				apiv1.ResourceCPU:    resource.MustParse("0.200"),
@@ -1403,115 +1356,66 @@ func TestMainContainerCustomization(t *testing.T) {
 	}
 	// podSpecPatch in workflow spec takes precedence over the main container's
 	// configuration in controller so here we respect what's specified in podSpecPatch.
-	wf := wfv1.MustUnmarshalWorkflow(helloWorldWfWithPatch)
-	woc := newWoc(*wf)
-	ctx := context.Background()
-	woc.controller.Config.MainContainer = mainCtrSpec
-	mainCtr := woc.execWf.Spec.Templates[0].Container
-	pod, _ := woc.createWorkflowPod(ctx, wf.Name, []apiv1.Container{*mainCtr}, &wf.Spec.Templates[0], &createWorkflowPodOpts{})
-	assert.Equal(t, "0.800", pod.Spec.Containers[1].Resources.Limits.Cpu().AsDec().String())
-
+	t.Run("PodSpecPatchPrecedence", func(t *testing.T) {
+		wf := wfv1.MustUnmarshalWorkflow(helloWorldWfWithPatch)
+		woc := newWoc(*wf)
+		woc.controller.Config.MainContainer = mainCtrSpec
+		mainCtr := woc.execWf.Spec.Templates[0].Container
+		pod, _ := woc.createWorkflowPod(ctx, wf.Name, []apiv1.Container{*mainCtr}, &wf.Spec.Templates[0], &createWorkflowPodOpts{})
+		assert.Equal(t, "0.800", pod.Spec.Containers[1].Resources.Limits.Cpu().AsDec().String())
+	})
 	// The main container's resources should be changed since the existing
 	// container's resources are not specified.
-	wf = wfv1.MustUnmarshalWorkflow(helloWorldWf)
-	woc = newWoc(*wf)
-	woc.controller.Config.MainContainer = mainCtrSpec
-	mainCtr = woc.execWf.Spec.Templates[0].Container
-	mainCtr.Resources = apiv1.ResourceRequirements{Limits: apiv1.ResourceList{}}
-	pod, _ = woc.createWorkflowPod(ctx, wf.Name, []apiv1.Container{*mainCtr}, &wf.Spec.Templates[0], &createWorkflowPodOpts{})
-	assert.Equal(t, "0.200", pod.Spec.Containers[1].Resources.Limits.Cpu().AsDec().String())
+	t.Run("Default", func(t *testing.T) {
+		wf := wfv1.MustUnmarshalWorkflow(helloWorldWf)
+		woc := newWoc(*wf)
+		woc.controller.Config.MainContainer = mainCtrSpec
+		mainCtr := woc.execWf.Spec.Templates[0].Container
+		mainCtr.Resources = apiv1.ResourceRequirements{Limits: apiv1.ResourceList{}}
+		pod, err := woc.createWorkflowPod(ctx, wf.Name, []apiv1.Container{*mainCtr}, &wf.Spec.Templates[0], &createWorkflowPodOpts{})
+		if assert.NoError(t, err) {
+			ctr := pod.Spec.Containers[1]
+			assert.NotNil(t, ctr.SecurityContext)
+			if assert.NotNil(t, pod.Spec.Containers[1].Resources) {
+				assert.Equal(t, "0.200", pod.Spec.Containers[1].Resources.Limits.Cpu().AsDec().String())
+			}
+		}
+	})
 
 	// Workflow spec's main container takes precedence over config in controller
 	// so here the main container resources remain unchanged.
-	wf = wfv1.MustUnmarshalWorkflow(helloWorldWf)
-	woc = newWoc(*wf)
-	woc.controller.Config.MainContainer = mainCtrSpec
-	mainCtr = woc.execWf.Spec.Templates[0].Container
-	wf.Spec.Templates[0].Container.Name = common.MainContainerName
-	wf.Spec.Templates[0].Container.Resources = apiv1.ResourceRequirements{
-		Limits: apiv1.ResourceList{
-			apiv1.ResourceCPU:    resource.MustParse("0.900"),
-			apiv1.ResourceMemory: resource.MustParse("512Mi"),
-		},
-	}
-	pod, _ = woc.createWorkflowPod(ctx, wf.Name, []apiv1.Container{*mainCtr}, &wf.Spec.Templates[0], &createWorkflowPodOpts{})
-	assert.Equal(t, "0.900", pod.Spec.Containers[1].Resources.Limits.Cpu().AsDec().String())
+	t.Run("ContainerPrecedence", func(t *testing.T) {
+		wf := wfv1.MustUnmarshalWorkflow(helloWorldWf)
+		woc := newWoc(*wf)
+		woc.controller.Config.MainContainer = mainCtrSpec
+		mainCtr := wf.Spec.Templates[0].Container
+		mainCtr.Name = common.MainContainerName
+		mainCtr.Resources = apiv1.ResourceRequirements{
+			Limits: apiv1.ResourceList{
+				apiv1.ResourceCPU:    resource.MustParse("0.900"),
+				apiv1.ResourceMemory: resource.MustParse("512Mi"),
+			},
+		}
+		pod, _ := woc.createWorkflowPod(ctx, wf.Name, []apiv1.Container{*mainCtr}, &wf.Spec.Templates[0], &createWorkflowPodOpts{})
+		assert.Equal(t, "0.900", pod.Spec.Containers[1].Resources.Limits.Cpu().AsDec().String())
 
-	// If the name of the container in the workflow spec is not "main",
-	// the main container resources should remain unchanged.
-	wf = wfv1.MustUnmarshalWorkflow(helloWorldWf)
-	woc = newWoc(*wf)
-	mainCtr = woc.execWf.Spec.Templates[0].Container
-	mainCtr.Resources = apiv1.ResourceRequirements{
-		Limits: apiv1.ResourceList{
-			apiv1.ResourceCPU:    resource.MustParse("0.100"),
-			apiv1.ResourceMemory: resource.MustParse("512Mi"),
-		},
-	}
-	wf.Spec.Templates[0].Container.Name = "non-main"
-	wf.Spec.Templates[0].Container.Resources = apiv1.ResourceRequirements{
-		Limits: apiv1.ResourceList{
-			apiv1.ResourceCPU:    resource.MustParse("0.900"),
-			apiv1.ResourceMemory: resource.MustParse("512Mi"),
-		},
-	}
-	pod, _ = woc.createWorkflowPod(ctx, wf.Name, []apiv1.Container{*mainCtr}, &wf.Spec.Templates[0], &createWorkflowPodOpts{})
-	assert.Equal(t, "0.100", pod.Spec.Containers[1].Resources.Limits.Cpu().AsDec().String())
-
+	})
 	// If script template has limits then they take precedence over config in controller
-	wf = wfv1.MustUnmarshalWorkflow(scriptWf)
-	woc = newWoc(*wf)
-	woc.controller.Config.MainContainer = mainCtrSpec
-	mainCtr = &woc.execWf.Spec.Templates[0].Script.Container
-	wf.Spec.Templates[0].Script.Container.Resources = apiv1.ResourceRequirements{
-		Limits: apiv1.ResourceList{
-			apiv1.ResourceCPU:    resource.MustParse("1"),
-			apiv1.ResourceMemory: resource.MustParse("123Mi"),
-		},
-	}
-	pod, _ = woc.createWorkflowPod(ctx, wf.Name, []apiv1.Container{*mainCtr}, &wf.Spec.Templates[0], &createWorkflowPodOpts{})
-	assert.Equal(t, "1", pod.Spec.Containers[1].Resources.Limits.Cpu().AsDec().String())
-	assert.Equal(t, "128974848", pod.Spec.Containers[1].Resources.Limits.Memory().AsDec().String())
-
-}
-
-func TestIsResourcesSpecified(t *testing.T) {
-	wf := wfv1.MustUnmarshalWorkflow(helloWorldWf)
-	woc := newWoc(*wf)
-	mainCtr := woc.execWf.Spec.Templates[0].Container
-	mainCtr.Resources = apiv1.ResourceRequirements{Limits: apiv1.ResourceList{}}
-	assert.False(t, isResourcesSpecified(mainCtr))
-
-	// only limits
-	mainCtr.Resources = apiv1.ResourceRequirements{
-		Limits: apiv1.ResourceList{
-			apiv1.ResourceCPU:    resource.MustParse("0.900"),
-			apiv1.ResourceMemory: resource.MustParse("512Mi"),
-		},
-	}
-	assert.True(t, isResourcesSpecified(mainCtr))
-
-	// only requests
-	mainCtr.Resources = apiv1.ResourceRequirements{
-		Requests: apiv1.ResourceList{
-			apiv1.ResourceCPU:    resource.MustParse("0.250"),
-			apiv1.ResourceMemory: resource.MustParse("64Mi"),
-		},
-	}
-	assert.True(t, isResourcesSpecified(mainCtr))
-
-	// both requests and limits
-	mainCtr.Resources = apiv1.ResourceRequirements{
-		Requests: apiv1.ResourceList{
-			apiv1.ResourceCPU:    resource.MustParse("0.250"),
-			apiv1.ResourceMemory: resource.MustParse("64Mi"),
-		},
-		Limits: apiv1.ResourceList{
-			apiv1.ResourceCPU:    resource.MustParse("0.900"),
-			apiv1.ResourceMemory: resource.MustParse("512Mi"),
-		},
-	}
-	assert.True(t, isResourcesSpecified(mainCtr))
+	t.Run("ScriptPrecedence", func(t *testing.T) {
+		wf := wfv1.MustUnmarshalWorkflow(scriptWf)
+		woc := newWoc(*wf)
+		woc.controller.Config.MainContainer = mainCtrSpec
+		mainCtr := &woc.execWf.Spec.Templates[0].Script.Container
+		mainCtr.Resources = apiv1.ResourceRequirements{
+			Limits: apiv1.ResourceList{
+				apiv1.ResourceCPU:    resource.MustParse("1"),
+				apiv1.ResourceMemory: resource.MustParse("123Mi"),
+			},
+		}
+		pod, _ := woc.createWorkflowPod(ctx, wf.Name, []apiv1.Container{*mainCtr}, &wf.Spec.Templates[0], &createWorkflowPodOpts{})
+		assert.Equal(t, "1", pod.Spec.Containers[1].Resources.Limits.Cpu().AsDec().String())
+		assert.Equal(t, "128974848", pod.Spec.Containers[1].Resources.Limits.Memory().AsDec().String())
+	})
 }
 
 var helloWindowsWf = `
@@ -1530,36 +1434,6 @@ spec:
         command: ["cmd", "/c"]
         args: ["echo", "Hello from Windows Container!"]
 `
-
-var helloLinuxWf = `
-apiVersion: argoproj.io/v1alpha1
-kind: Workflow
-metadata:
-  name: hello-hybrid-lin
-spec:
-  entrypoint: hello-linux
-  templates:
-    - name: hello-linux
-      nodeSelector:
-        kubernetes.io/os: linux
-      container:
-        image: alpine
-        command: [echo]
-        args: ["Hello from Linux Container!"]
-`
-
-func TestHybridWfVolumesWindows(t *testing.T) {
-	wf := wfv1.MustUnmarshalWorkflow(helloWindowsWf)
-	woc := newWoc(*wf)
-	woc.controller.Config.ContainerRuntimeExecutor = common.ContainerRuntimeExecutorDocker
-
-	ctx := context.Background()
-	mainCtr := woc.execWf.Spec.Templates[0].Container
-	pod, _ := woc.createWorkflowPod(ctx, wf.Name, []apiv1.Container{*mainCtr}, &wf.Spec.Templates[0], &createWorkflowPodOpts{})
-	assert.Equal(t, "\\\\.\\pipe\\docker_engine", pod.Spec.Containers[0].VolumeMounts[0].MountPath)
-	assert.Equal(t, false, pod.Spec.Containers[0].VolumeMounts[0].ReadOnly)
-	assert.Equal(t, (*apiv1.HostPathType)(nil), pod.Spec.Volumes[1].HostPath.Type)
-}
 
 func TestWindowsUNCPathsAreRemoved(t *testing.T) {
 	wf := wfv1.MustUnmarshalWorkflow(helloWindowsWf)
@@ -1607,19 +1481,6 @@ func TestWindowsUNCPathsAreRemoved(t *testing.T) {
 			}
 		}
 	}
-}
-
-func TestHybridWfVolumesLinux(t *testing.T) {
-	wf := wfv1.MustUnmarshalWorkflow(helloLinuxWf)
-	woc := newWoc(*wf)
-	woc.controller.Config.ContainerRuntimeExecutor = common.ContainerRuntimeExecutorDocker
-
-	ctx := context.Background()
-	mainCtr := woc.execWf.Spec.Templates[0].Container
-	pod, _ := woc.createWorkflowPod(ctx, wf.Name, []apiv1.Container{*mainCtr}, &wf.Spec.Templates[0], &createWorkflowPodOpts{})
-	assert.Equal(t, "/var/run/docker.sock", pod.Spec.Containers[0].VolumeMounts[0].MountPath)
-	assert.Equal(t, true, pod.Spec.Containers[0].VolumeMounts[0].ReadOnly)
-	assert.Equal(t, &hostPathSocket, pod.Spec.Volumes[1].HostPath.Type)
 }
 
 var propagateMaxDuration = `

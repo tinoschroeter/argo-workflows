@@ -9,6 +9,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/utils/pointer"
 )
 
@@ -113,6 +114,114 @@ func TestWorkflowHappenedBetween(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{CreationTimestamp: metav1.Time{Time: t1}},
 		Status:     WorkflowStatus{FinishedAt: metav1.Time{Time: t2}},
 	}))
+}
+
+func TestArtifact_ValidatePath(t *testing.T) {
+	t.Run("empty path fails", func(t *testing.T) {
+		a1 := Artifact{Name: "a1", Path: ""}
+		err := a1.CleanPath()
+		assert.EqualError(t, err, "Artifact 'a1' did not specify a path")
+		assert.Equal(t, "", a1.Path)
+	})
+
+	t.Run("directory traversal above safe base dir fails", func(t *testing.T) {
+		var assertPathError = func(err error) {
+			if assert.Error(t, err) {
+				assert.Contains(t, err.Error(), "Directory traversal is not permitted")
+			}
+		}
+
+		a1 := Artifact{Name: "a1", Path: "/tmp/.."}
+		assertPathError(a1.CleanPath())
+		assert.Equal(t, "/tmp/..", a1.Path)
+
+		a2 := Artifact{Name: "a2", Path: "/tmp/../"}
+		assertPathError(a2.CleanPath())
+		assert.Equal(t, "/tmp/../", a2.Path)
+
+		a3 := Artifact{Name: "a3", Path: "/tmp/../../etc/passwd"}
+		assertPathError(a3.CleanPath())
+		assert.Equal(t, "/tmp/../../etc/passwd", a3.Path)
+
+		a4 := Artifact{Name: "a4", Path: "/tmp/../tmp"}
+		assertPathError(a4.CleanPath())
+		assert.Equal(t, "/tmp/../tmp", a4.Path)
+
+		a5 := Artifact{Name: "a5", Path: "/tmp/../tmp/"}
+		assertPathError(a5.CleanPath())
+		assert.Equal(t, "/tmp/../tmp/", a5.Path)
+
+		a6 := Artifact{Name: "a6", Path: "/tmp/subdir/../../tmp/subdir/"}
+		assertPathError(a6.CleanPath())
+		assert.Equal(t, "/tmp/subdir/../../tmp/subdir/", a6.Path)
+
+		a7 := Artifact{Name: "a7", Path: "/tmp/../tmp-imposter"}
+		assertPathError(a7.CleanPath())
+		assert.Equal(t, "/tmp/../tmp-imposter", a7.Path)
+	})
+
+	t.Run("directory traversal with no safe base dir succeeds", func(t *testing.T) {
+		a1 := Artifact{Name: "a1", Path: ".."}
+		err := a1.CleanPath()
+		assert.NoError(t, err)
+		assert.Equal(t, "..", a1.Path)
+
+		a2 := Artifact{Name: "a2", Path: "../"}
+		err = a2.CleanPath()
+		assert.NoError(t, err)
+		assert.Equal(t, "..", a2.Path)
+
+		a3 := Artifact{Name: "a3", Path: "../.."}
+		err = a3.CleanPath()
+		assert.NoError(t, err)
+		assert.Equal(t, "../..", a3.Path)
+
+		a4 := Artifact{Name: "a4", Path: "../etc/passwd"}
+		err = a4.CleanPath()
+		assert.NoError(t, err)
+		assert.Equal(t, "../etc/passwd", a4.Path)
+	})
+
+	t.Run("directory traversal ending within safe base dir succeeds", func(t *testing.T) {
+		a1 := Artifact{Name: "a1", Path: "/tmp/../tmp/abcd"}
+		err := a1.CleanPath()
+		assert.NoError(t, err)
+		assert.Equal(t, "/tmp/abcd", a1.Path)
+
+		a2 := Artifact{Name: "a2", Path: "/tmp/subdir/../../tmp/subdir/abcd"}
+		err = a2.CleanPath()
+		assert.NoError(t, err)
+		assert.Equal(t, "/tmp/subdir/abcd", a2.Path)
+	})
+
+	t.Run("artifact path filenames are allowed to contain double dots", func(t *testing.T) {
+		a1 := Artifact{Name: "a1", Path: "/tmp/..artifact.txt"}
+		err := a1.CleanPath()
+		assert.NoError(t, err)
+		assert.Equal(t, "/tmp/..artifact.txt", a1.Path)
+
+		a2 := Artifact{Name: "a2", Path: "/tmp/artif..t.txt"}
+		err = a2.CleanPath()
+		assert.NoError(t, err)
+		assert.Equal(t, "/tmp/artif..t.txt", a2.Path)
+	})
+
+	t.Run("normal artifact path succeeds", func(t *testing.T) {
+		a1 := Artifact{Name: "a1", Path: "/tmp"}
+		err := a1.CleanPath()
+		assert.NoError(t, err)
+		assert.Equal(t, "/tmp", a1.Path)
+
+		a2 := Artifact{Name: "a2", Path: "/tmp/"}
+		err = a2.CleanPath()
+		assert.NoError(t, err)
+		assert.Equal(t, "/tmp", a2.Path)
+
+		a3 := Artifact{Name: "a3", Path: "/tmp/abcd/some-artifact.txt"}
+		err = a3.CleanPath()
+		assert.NoError(t, err)
+		assert.Equal(t, "/tmp/abcd/some-artifact.txt", a3.Path)
+	})
 }
 
 func TestArtifactLocation_IsArchiveLogs(t *testing.T) {
@@ -1095,4 +1204,53 @@ func TestStepSpecGetExitHook(t *testing.T) {
 	step = WorkflowStep{Name: "A", Hooks: LifecycleHooks{"exit": LifecycleHook{Template: "hook"}}}
 	hooks = step.GetExitHook(step.Arguments)
 	assert.Equal(t, "hook", hooks.Template)
+
+}
+
+func TestTemplate_RetryStrategy(t *testing.T) {
+	tmpl := Template{}
+	strategy, err := tmpl.GetRetryStrategy()
+	assert.Nil(t, err)
+	assert.Equal(t, wait.Backoff{Steps: 1}, strategy)
+}
+
+func TestGetExecSpec(t *testing.T) {
+	wf := Workflow{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test",
+			Namespace: "test",
+		},
+		Spec: WorkflowSpec{
+			Templates: []Template{
+				{Name: "spec-template"},
+			},
+		},
+		Status: WorkflowStatus{
+			StoredWorkflowSpec: &WorkflowSpec{
+				Templates: []Template{
+					{Name: "stored-spec-template"},
+				},
+			},
+		},
+	}
+
+	assert.Equal(t, wf.GetExecSpec().Templates[0].Name, "stored-spec-template")
+
+	wf = Workflow{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test",
+			Namespace: "test",
+		},
+		Spec: WorkflowSpec{
+			Templates: []Template{
+				{Name: "spec-template"},
+			},
+		},
+	}
+
+	assert.Equal(t, wf.GetExecSpec().Templates[0].Name, "spec-template")
+
+	wf.Status.StoredWorkflowSpec = nil
+
+	assert.Equal(t, wf.GetExecSpec().Templates[0].Name, "spec-template")
 }

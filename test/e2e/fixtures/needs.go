@@ -11,13 +11,12 @@ var (
 		return os.Getenv("CI") != "", "CI"
 	}
 	BaseLayerArtifacts Need = func(s *E2ESuite) (bool, string) {
-		met, _ := None(K8SAPI, Kubelet)(s)
+		met, _ := None(Kubelet)(s)
 		return met, "base layer artifact support"
 	}
-	Docker   = Executor("docker")
 	Emissary = Executor("emissary")
-	K8SAPI   = Executor("k8sapi")
 	Kubelet  = Executor("kubelet")
+	PNS      = Executor("pns")
 )
 
 func Executor(e string) Need {

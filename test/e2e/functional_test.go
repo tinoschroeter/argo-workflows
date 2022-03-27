@@ -62,6 +62,35 @@ func (s *FunctionalSuite) TestWorkflowLevelErrorRetryPolicy() {
 		})
 }
 
+func (s *FunctionalSuite) TestWorkflowMetadataLabelsFrom() {
+	s.Given().
+		Workflow(`
+metadata:
+  generateName: metadata-
+spec:
+  arguments:
+    parameters:
+      - name: foo
+        value: bar
+  workflowMetadata:
+    labelsFrom:
+      my-label: 
+        expression: workflow.parameters.foo
+  entrypoint: main
+  templates:
+    - name: main
+      container:
+        image: argoproj/argosay:v2
+`).
+		When().
+		SubmitWorkflow().
+		WaitForWorkflow(fixtures.ToBeSucceeded).
+		Then().
+		ExpectWorkflow(func(t *testing.T, metadata *metav1.ObjectMeta, status *wfv1.WorkflowStatus) {
+			assert.Equal(t, "bar", metadata.Labels["my-label"])
+		})
+}
+
 func (s *FunctionalSuite) TestWorkflowTTL() {
 	s.Given().
 		Workflow(`
@@ -386,6 +415,29 @@ func (s *FunctionalSuite) TestEventOnWorkflowSuccess() {
 						assert.Fail(t, e.Reason)
 					}
 				}
+			},
+		)
+}
+
+func (s *FunctionalSuite) TestLargeWorkflowFailure() {
+	var uid types.UID
+	s.Given().
+		Workflow("@expectedfailures/large-workflow.yaml").
+		When().
+		SubmitWorkflow().
+		WaitForWorkflow(120*time.Second).
+		Then().
+		ExpectWorkflow(func(t *testing.T, metadata *metav1.ObjectMeta, status *wfv1.WorkflowStatus) {
+			uid = metadata.UID
+		}).
+		ExpectAuditEvents(
+			fixtures.HasInvolvedObject(workflow.WorkflowKind, uid),
+			2,
+			func(t *testing.T, e []apiv1.Event) {
+				assert.Equal(t, "WorkflowRunning", e[0].Reason)
+
+				assert.Equal(t, "WorkflowFailed", e[1].Reason)
+				assert.Contains(t, e[1].Message, "workflow templates are limited to 128KB, this workflow is 128001 bytes")
 			},
 		)
 }
@@ -1120,4 +1172,53 @@ spec:
 
 		})
 
+}
+
+func (s *FunctionalSuite) TestContainerSetRetryFail() {
+	s.Given().
+		Workflow(`
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: containerset-retry-success-
+spec:
+  entrypoint: main
+  templates:
+    - name: main
+      containerSet:
+        containers:
+          - name: a
+            image: argoproj/argosay:v2
+            command: [sh, -c]
+            args: ['FILE=test.yml; EXITCODE=1; if test -f "$FILE"; then EXITCODE=0; else touch $FILE; fi; exit $EXITCODE']
+        retryStrategy:
+          retries: 2
+          duration: "5s"
+`).
+		When().
+		SubmitWorkflow().
+		WaitForWorkflow(fixtures.ToBeSucceeded)
+}
+
+func (s *FunctionalSuite) TestContainerSetRetrySuccess() {
+	s.Given().
+		Workflow(`
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: containerset-no-retry-fail-
+spec:
+  entrypoint: main
+  templates:
+    - name: main
+      containerSet:
+        containers:
+          - name: a
+            image: argoproj/argosay:v2
+            command: [sh, -c]
+            args: ['FILE=test.yml; EXITCODE=1; if test -f "$FILE"; then EXITCODE=0; else touch $FILE; fi; exit $EXITCODE']
+`).
+		When().
+		SubmitWorkflow().
+		WaitForWorkflow(fixtures.ToBeFailed)
 }

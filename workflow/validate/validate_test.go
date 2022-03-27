@@ -1064,7 +1064,7 @@ spec:
     container:
       image: alpine:latest
       command: [sh, -c]
-      args: ["echo {{workflow.status}}"]
+      args: ["echo {{workflow.failures}}"]
 `
 
 func TestExitHandler(t *testing.T) {
@@ -1626,9 +1626,9 @@ func TestBaseImageOutputVerify(t *testing.T) {
 	wfNonPathOutputParam := unmarshalWf(nonPathOutputParameter)
 	var err error
 
-	for _, executor := range []string{common.ContainerRuntimeExecutorK8sAPI, common.ContainerRuntimeExecutorKubelet, common.ContainerRuntimeExecutorPNS, common.ContainerRuntimeExecutorDocker, common.ContainerRuntimeExecutorDocker, common.ContainerRuntimeExecutorEmissary, ""} {
+	for _, executor := range []string{common.ContainerRuntimeExecutorKubelet, common.ContainerRuntimeExecutorPNS, common.ContainerRuntimeExecutorEmissary, ""} {
 		switch executor {
-		case common.ContainerRuntimeExecutorK8sAPI, common.ContainerRuntimeExecutorKubelet:
+		case common.ContainerRuntimeExecutorKubelet:
 			_, err = ValidateWorkflow(wftmplGetter, cwftmplGetter, wfBaseOutArt, ValidateOpts{ContainerRuntimeExecutor: executor})
 			assert.Error(t, err)
 			_, err = ValidateWorkflow(wftmplGetter, cwftmplGetter, wfBaseOutParam, ValidateOpts{ContainerRuntimeExecutor: executor})
@@ -1644,7 +1644,7 @@ func TestBaseImageOutputVerify(t *testing.T) {
 			assert.NoError(t, err)
 			_, err = ValidateWorkflow(wftmplGetter, cwftmplGetter, wfBaseWithEmptyDirOutArt, ValidateOpts{ContainerRuntimeExecutor: executor})
 			assert.Error(t, err)
-		case common.ContainerRuntimeExecutorDocker, common.ContainerRuntimeExecutorEmissary, "":
+		case common.ContainerRuntimeExecutorEmissary, "":
 			_, err = ValidateWorkflow(wftmplGetter, cwftmplGetter, wfBaseOutArt, ValidateOpts{ContainerRuntimeExecutor: executor})
 			assert.NoError(t, err)
 			_, err = ValidateWorkflow(wftmplGetter, cwftmplGetter, wfBaseOutParam, ValidateOpts{ContainerRuntimeExecutor: executor})
@@ -1850,104 +1850,6 @@ spec:
 `)
 	_, err := ValidateWorkflow(wftmplGetter, cwftmplGetter, wf, ValidateOpts{})
 	assert.EqualError(t, err, "podGC.labelSelector invalid: \"InvalidOperator\" is not a valid pod selector operator")
-}
-
-//nolint:gosec
-var validAutomountServiceAccountTokenUseWfLevel = `
-apiVersion: argoproj.io/v1alpha1
-kind: Workflow
-metadata:
-  generateName: valid-automount-service-account-token-use-wf-level-
-spec:
-  entrypoint: whalesay
-  templates:
-  - name: whalesay
-    container:
-      image: alpine:latest
-  - name: per-tmpl-automount
-    container:
-      image: alpine:latest
-    automountServiceAccountToken: true
-    executor:
-      ServiceAccountName: ""
-  automountServiceAccountToken: false
-  executor:
-    ServiceAccountName: foo
-`
-
-//nolint:gosec
-var validAutomountServiceAccountTokenUseTmplLevel = `
-apiVersion: argoproj.io/v1alpha1
-kind: Workflow
-metadata:
-  generateName: valid-automount-service-account-token-use-tmpl-level-
-spec:
-  entrypoint: whalesay
-  templates:
-  - name: whalesay
-    container:
-      image: alpine:latest
-    executor:
-      ServiceAccountName: foo
-  automountServiceAccountToken: false
-`
-
-//nolint:gosec
-var invalidAutomountServiceAccountTokenUseWfLevel = `
-apiVersion: argoproj.io/v1alpha1
-kind: Workflow
-metadata:
-  generateName: invalid-automount-service-account-token-use-wf-level-
-spec:
-  entrypoint: whalesay
-  templates:
-  - name: whalesay
-    container:
-      image: alpine:latest
-  automountServiceAccountToken: false
-`
-
-//nolint:gosec
-var invalidAutomountServiceAccountTokenUseTmplLevel = `
-apiVersion: argoproj.io/v1alpha1
-kind: Workflow
-metadata:
-  generateName: invalid-automount-service-account-token-use-tmpl-level-
-spec:
-  entrypoint: whalesay
-  templates:
-  - name: whalesay
-    container:
-      image: alpine:latest
-    automountServiceAccountToken: false
-`
-
-// TestAutomountServiceAccountTokenUse verifies an error against a workflow of an invalid automountServiceAccountToken use.
-func TestAutomountServiceAccountTokenUse(t *testing.T) {
-	{
-		wf := unmarshalWf(validAutomountServiceAccountTokenUseWfLevel)
-		_, err := ValidateWorkflow(wftmplGetter, cwftmplGetter, wf, ValidateOpts{})
-
-		assert.NoError(t, err)
-	}
-	{
-		wf := unmarshalWf(validAutomountServiceAccountTokenUseTmplLevel)
-		_, err := ValidateWorkflow(wftmplGetter, cwftmplGetter, wf, ValidateOpts{})
-
-		assert.NoError(t, err)
-	}
-	{
-		wf := unmarshalWf(invalidAutomountServiceAccountTokenUseWfLevel)
-		_, err := ValidateWorkflow(wftmplGetter, cwftmplGetter, wf, ValidateOpts{})
-
-		assert.EqualError(t, err, "templates.whalesay.executor.serviceAccountName must not be empty if automountServiceAccountToken is false")
-	}
-	{
-		wf := unmarshalWf(invalidAutomountServiceAccountTokenUseTmplLevel)
-		_, err := ValidateWorkflow(wftmplGetter, cwftmplGetter, wf, ValidateOpts{})
-
-		assert.EqualError(t, err, "templates.whalesay.executor.serviceAccountName must not be empty if automountServiceAccountToken is false")
-	}
 }
 
 var allowPlaceholderInVariableTakenFromInputs = `
@@ -2614,16 +2516,8 @@ func TestDagAndStepLevelOutputArtifactsForDiffExecutor(t *testing.T) {
 		_, err := validateWithOptions(dagAndStepLevelOutputArtifacts, ValidateOpts{ContainerRuntimeExecutor: common.ContainerRuntimeExecutorEmissary})
 		assert.NoError(t, err)
 	})
-	t.Run("DockerExecutor", func(t *testing.T) {
-		_, err := validateWithOptions(dagAndStepLevelOutputArtifacts, ValidateOpts{ContainerRuntimeExecutor: common.ContainerRuntimeExecutorDocker})
-		assert.NoError(t, err)
-	})
 	t.Run("PNSExecutor", func(t *testing.T) {
 		_, err := validateWithOptions(dagAndStepLevelOutputArtifacts, ValidateOpts{ContainerRuntimeExecutor: common.ContainerRuntimeExecutorPNS})
-		assert.NoError(t, err)
-	})
-	t.Run("K8SExecutor", func(t *testing.T) {
-		_, err := validateWithOptions(dagAndStepLevelOutputArtifacts, ValidateOpts{ContainerRuntimeExecutor: common.ContainerRuntimeExecutorK8sAPI})
 		assert.NoError(t, err)
 	})
 	t.Run("KubeletExecutor", func(t *testing.T) {

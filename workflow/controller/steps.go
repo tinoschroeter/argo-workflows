@@ -490,7 +490,7 @@ func (woc *wfOperationCtx) expandStep(step wfv1.WorkflowStep) ([]wfv1.WorkflowSt
 
 	for i, item := range items {
 		var newStep wfv1.WorkflowStep
-		newStepName, err := processItem(t, step.Name, i, item, &newStep)
+		newStepName, err := processItem(t, step.Name, i, item, &newStep, step.When)
 		if err != nil {
 			return nil, err
 		}
@@ -521,9 +521,7 @@ func (woc *wfOperationCtx) prepareDefaultMetricScope() (map[string]string, map[s
 }
 
 func (woc *wfOperationCtx) prepareMetricScope(node *wfv1.NodeStatus) (map[string]string, map[string]func() float64) {
-	realTimeScope := make(map[string]func() float64)
-	localScope := woc.globalParams.DeepCopy()
-
+	localScope, realTimeScope := woc.prepareDefaultMetricScope()
 	if node.Fulfilled() {
 		localScope[common.LocalVarDuration] = fmt.Sprintf("%f", node.FinishedAt.Sub(node.StartedAt.Time).Seconds())
 		realTimeScope[common.LocalVarDuration] = func() float64 {
