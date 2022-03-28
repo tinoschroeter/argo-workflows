@@ -150,9 +150,6 @@ const (
 	// EnvAgentPatchRate is the rate that the Argo Agent will patch the Workflow TaskSet
 	EnvAgentPatchRate = "ARGO_AGENT_PATCH_RATE"
 
-	// ContainerRuntimeExecutorKubelet to use the kubelet as container runtime executor
-	ContainerRuntimeExecutorKubelet = "kubelet"
-
 	// ContainerRuntimeExecutorPNS indicates to use process namespace sharing as the container runtime executor
 	ContainerRuntimeExecutorPNS = "pns"
 
@@ -234,6 +231,8 @@ const (
 
 	// ErrDeadlineExceeded is the pod status reason when exceed deadline
 	ErrDeadlineExceeded = "DeadlineExceeded"
+
+	ConfigMapName = "workflow-controller-configmap"
 )
 
 // AnnotationKeyKillCmd specifies the command to use to kill to container, useful for injected sidecars
